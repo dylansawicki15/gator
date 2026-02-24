@@ -94,6 +94,15 @@ func handlerRegister(s *state, cmd command) error {
 	return nil
 }
 
+func handlerReset(s *state, _ command) error {
+	if err := s.db.DeleteUsers(context.Background()); err != nil {
+		fmt.Printf("error resetting database: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("database reset successfully")
+	return nil
+}
+
 func main() {
 	configFilePath := config.GetConfigFilePath()
 
@@ -123,6 +132,7 @@ func main() {
 	cmds := commands{handlers: make(map[string]func(*state, command) error)}
 	cmds.register("login", handlerLogin)
 	cmds.register("register", handlerRegister)
+	cmds.register("reset", handlerReset)
 
 	cmd := command{
 		name:      os.Args[1],
