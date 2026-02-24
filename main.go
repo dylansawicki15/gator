@@ -1,15 +1,22 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/dylansawicki15/gator/internal/config"
+	"github.com/dylansawicki15/gator/internal/database"
+	"github.com/google/uuid"
+	_ "github.com/lib/pq"
 )
 
 type state struct {
-	config *config.Config
+	db  *database.Queries
+	cfg *config.Config
 }
 
 type command struct {
@@ -43,13 +50,47 @@ func handlerLogin(s *state, cmd command) error {
 	}
 
 	username := cmd.arguments[0]
-	configPath := config.GetConfigFilePath()
 
-	if err := config.SetUser(configPath, s.config, username); err != nil {
+	_, err := s.db.GetUser(context.Background(), username)
+	if err != nil {
+		fmt.Println("user does not exist")
+		os.Exit(1)
+	}
+
+	configPath := config.GetConfigFilePath()
+	if err := config.SetUser(configPath, s.cfg, username); err != nil {
 		return err
 	}
 
 	fmt.Printf("Current user has been set to %s\n", username)
+	return nil
+}
+
+func handlerRegister(s *state, cmd command) error {
+	if len(cmd.arguments) == 0 {
+		return errors.New("a name is required")
+	}
+
+	name := cmd.arguments[0]
+	now := time.Now()
+
+	user, err := s.db.CreateUser(context.Background(), database.CreateUserParams{
+		ID:        uuid.New(),
+		CreatedAt: now,
+		UpdatedAt: now,
+		Name:      name,
+	})
+	if err != nil {
+		fmt.Println("user already exists")
+		os.Exit(1)
+	}
+
+	configPath := config.GetConfigFilePath()
+	if err := config.SetUser(configPath, s.cfg, name); err != nil {
+		return err
+	}
+
+	fmt.Printf("User created: %+v\n", user)
 	return nil
 }
 
@@ -67,9 +108,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	appState := state{config: cfg}
+	db, err := sql.Open("postgres", cfg.DbURL)
+	if err != nil {
+		fmt.Printf("error opening database: %v\n", err)
+		os.Exit(1)
+	}
+
+	dbQueries := database.New(db)
+
+	appState := state{
+		db:  dbQueries,
+		cfg: cfg,
+	}
 	cmds := commands{handlers: make(map[string]func(*state, command) error)}
 	cmds.register("login", handlerLogin)
+	cmds.register("register", handlerRegister)
 
 	cmd := command{
 		name:      os.Args[1],
@@ -80,5 +133,4 @@ func main() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-
 }
