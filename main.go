@@ -10,12 +10,13 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/dylansawicki15/gator/internal/config"
 	"github.com/dylansawicki15/gator/internal/database"
 	"github.com/google/uuid"
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 type RSSFeed struct {
@@ -282,6 +283,24 @@ func handlerFeeds(s *state, _ command) error {
 	return nil
 }
 
+func parsePublishedAt(s string) (time.Time, error) {
+	formats := []string{
+		time.RFC1123Z,
+		time.RFC1123,
+		time.RFC822Z,
+		time.RFC822,
+		"2006-01-02T15:04:05Z07:00",
+		"2006-01-02T15:04:05Z",
+		"2006-01-02",
+	}
+	for _, format := range formats {
+		if t, err := time.Parse(format, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unable to parse time %q", s)
+}
+
 func scrapeFeeds(s *state) {
 	feed, err := s.db.GetNextFeedToFetch(context.Background())
 	if err != nil {
@@ -301,10 +320,55 @@ func scrapeFeeds(s *state) {
 		return
 	}
 
-	fmt.Printf("--- %s ---\n", rssFeed.Channel.Title)
+	fmt.Printf("Fetching feed: %s\n", feed.Name)
 	for _, item := range rssFeed.Channel.Item {
-		fmt.Println(item.Title)
+		publishedAt := sql.NullTime{}
+		if t, err := parsePublishedAt(item.PubDate); err == nil {
+			publishedAt = sql.NullTime{Time: t, Valid: true}
+		}
+
+		_, err := s.db.CreatePost(context.Background(), database.CreatePostParams{
+			ID:          uuid.New(),
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
+			Title:       item.Title,
+			Url:         item.Link,
+			Description: sql.NullString{String: item.Description, Valid: item.Description != ""},
+			PublishedAt: publishedAt,
+			FeedID:      feed.ID,
+		})
+		if err != nil {
+			if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
+				continue
+			}
+			fmt.Printf("error saving post %q: %v\n", item.Title, err)
+		}
 	}
+	fmt.Printf("Saved posts from %s\n", feed.Name)
+}
+
+func handlerBrowse(s *state, cmd command, user database.User) error {
+	limit := 2
+	if len(cmd.arguments) > 0 {
+		var err error
+		limit, err = strconv.Atoi(cmd.arguments[0])
+		if err != nil {
+			return fmt.Errorf("invalid limit: %w", err)
+		}
+	}
+
+	posts, err := s.db.GetPostsForUser(context.Background(), database.GetPostsForUserParams{
+		UserID: user.ID,
+		Limit:  int32(limit),
+	})
+	if err != nil {
+		return fmt.Errorf("could not get posts: %w", err)
+	}
+
+	for _, p := range posts {
+		fmt.Printf("Title: %s\nURL:   %s\n\n", p.Title, p.Url)
+	}
+	return nil
 }
 
 func handlerAgg(s *state, cmd command) error {
@@ -371,6 +435,7 @@ func main() {
 	cmds.register("follow", middlewareLoggedIn(handlerFollow))
 	cmds.register("unfollow", middlewareLoggedIn(handlerUnfollow))
 	cmds.register("following", middlewareLoggedIn(handlerFollowing))
+	cmds.register("browse", middlewareLoggedIn(handlerBrowse))
 
 	cmd := command{
 		name:      os.Args[1],
