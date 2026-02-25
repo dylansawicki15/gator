@@ -237,6 +237,28 @@ func handlerFollow(s *state, cmd command, user database.User) error {
 	return nil
 }
 
+func handlerUnfollow(s *state, cmd command, user database.User) error {
+	if len(cmd.arguments) == 0 {
+		return errors.New("unfollow requires a url argument")
+	}
+
+	feed, err := s.db.GetFeedByURL(context.Background(), cmd.arguments[0])
+	if err != nil {
+		return fmt.Errorf("could not find feed with url %s: %w", cmd.arguments[0], err)
+	}
+
+	err = s.db.DeleteFeedFollow(context.Background(), database.DeleteFeedFollowParams{
+		UserID: user.ID,
+		FeedID: feed.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("could not unfollow feed: %w", err)
+	}
+
+	fmt.Printf("Unfollowed %s\n", feed.Name)
+	return nil
+}
+
 func handlerFollowing(s *state, _ command, user database.User) error {
 	follows, err := s.db.GetFeedFollowsForUser(context.Background(), user.ID)
 	if err != nil {
@@ -313,6 +335,7 @@ func main() {
 	cmds.register("addfeed", middlewareLoggedIn(handlerAddFeed))
 	cmds.register("feeds", handlerFeeds)
 	cmds.register("follow", middlewareLoggedIn(handlerFollow))
+	cmds.register("unfollow", middlewareLoggedIn(handlerUnfollow))
 	cmds.register("following", middlewareLoggedIn(handlerFollowing))
 
 	cmd := command{
